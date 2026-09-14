@@ -31,7 +31,8 @@ class GSOffboardControl(Node):
         #self.create_subscription(PoseStamped,"/new_target",self.target_point_listener,qos_profile)
         self.create_subscription(Bool,"/boundry_check",self.trigger_command,qos_profile)
         self.create_subscription(Bool,"/connection_fail_status",self.connection_failed,qos_profile)
-        self.create_subscription(String,"/drone3/command",self.gs_command,qos_profile)
+        self.create_subscription(String,"/drone7/command",self.gs_command,qos_profile)
+        self.create_subscription(String,"/drone7/mode",self.gs_mode,qos_profile)
         self.vehicle_command_pub = self.create_publisher(VehicleCommand,'/fmu/in/vehicle_command',qos_profile)
         
         # Timer at 50Hz
@@ -76,7 +77,7 @@ class GSOffboardControl(Node):
         self.distance=0.5
 
         # safty flags
-        self.offboard_mode=True
+        self.offboard_mode=False
         self.arm=False
         self.land_request=False
         self.ready2hover=True
@@ -88,6 +89,9 @@ class GSOffboardControl(Node):
         self.take_off=False
         self.emergency_landing_request = False
         self.mocap_connection_failed = False
+        self.position_mode=False
+        self.manual_mode=False
+
         threading.Thread(target=self.keyboard_listener,daemon=True).start()
 
     def keyboard_listener(self):
@@ -97,6 +101,10 @@ class GSOffboardControl(Node):
             print(f'command recieved = {self.key}')
 
     def gs_command(self,msg):
+        print(f"Subscriber succes:{msg}")
+        self.drone_command=msg.data
+
+    def gs_mode(self,msg):
         print(f"Subscriber succes:{msg}")
         self.drone_command=msg.data
 
@@ -117,17 +125,34 @@ class GSOffboardControl(Node):
 
     def fly_status(self):
         if self.emergency_landing_request or self.mocap_connection_failed:
-            self.land_request=True
-            self.ready2hover=False
-            self.disarm=False
-            self.path1=False
-            self.path2=False
-            self.target_point_follower=False
-            self.hold=False
-            print(f'emergency landing requested out of bound:{self.emergency_landing_request}, connection lost:{self.mocap_connection_failed}')
+            time.sleep(1.0)
+            if self.emergency_landing_request or self.mocap_connection_failed:
+                self.land_request=True
+                self.ready2hover=False
+                self.disarm=False
+                self.path1=False
+                self.path2=False
+                self.target_point_follower=False
+                self.hold=False
+                print(f'emergency landing requested out of bound:{self.emergency_landing_request}, connection lost:{self.mocap_connection_failed}')
+            else:
+                pass
         else:
-            if self.drone_command=='arm':
+            if self.drone_command=='offboard':
+                self.offboard_mode=True
+                self.land_request=False
+                self.get_logger().info("GS sent offboard command")
+            elif self.drone_command=='position':
+                self.position_mode=True
+                self.land_request=False
+                self.get_logger().info("GS sent position command")
+            elif self.drone_command=='manual':
+                self.manual_mode=True
+                self.land_request=False
+                self.get_logger().info("GS sent manual command")
+            elif self.drone_command=='arm':
                 self.arm=True
+                self.land_request=False
                 self.get_logger().info("GS sent arm command")
             elif self.drone_command=='fly':
                 self.take_off=True
@@ -233,6 +258,23 @@ class GSOffboardControl(Node):
             self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_DO_SET_MODE,param1=1.0,param2=6.0)
             self.get_logger().info("OFFBOARD mode set")
             self.offboard_mode=False
+            self.drone_command=''
+        elif self.position_mode:
+            self.get_logger().info("Switching to POSITION mode")
+
+            # Set OFFBOARD mode
+            self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_DO_SET_MODE,param1=1.0,param2=3.0)
+            self.get_logger().info("POSITION mode set")
+            self.position_mode=False
+            self.drone_command=''
+        elif self.manual_mode:
+            self.get_logger().info("Switching to MANUAL mode")
+
+            # Set OFFBOARD mode
+            self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_DO_SET_MODE,param1=1.0,param2=1.0)
+            self.get_logger().info("MANUAL mode set")
+            self.manual_mode=False
+            self.drone_command=''
         elif self.arm:
             self.get_logger().info("Arming")
 
@@ -252,6 +294,7 @@ class GSOffboardControl(Node):
             self.path_counter_circle+=1
         elif self.land_request:
             self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_NAV_LAND)
+            #self.drone_command=''
         elif self.disarm:
             self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM,param1=0.0)
         elif self.target_point_follower:
